@@ -24,7 +24,7 @@ video{width:100%;border-radius:10px;background:#000;display:none}
 <body>
 <div class="wrap" id="app"></div>
 <script>
-var K = { url: 'urlApp', tok: 'tokScan', usr: 'usrScan' };
+var K = { url: 'urlApp', tok: 'tokScan', usr: 'usrScan', id: 'idScan', pin: 'pinScan' };
 function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
 function $(s) { return document.querySelector(s); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -34,23 +34,29 @@ function call(action, payload) {
     .then(function (r) { return r.json(); })
     .then(function (r) {
       if (r && r.ok) return r.data;
-      if (r && r.expired) { ls(K.tok, null); showLogin('Sesi berakhir, masuk lagi.'); }
+      if (r && r.expired) { ls(K.tok, null); relogin(); }
       throw new Error((r && r.error) || 'Terjadi kesalahan.');
     }, function () { throw new Error('Tidak ada sinyal atau alamat salah.'); });
 }
+function relogin() {
+  var i = ls(K.id), p = ls(K.pin);
+  if (!i || !p) return showLogin('Sesi berakhir, masuk lagi.');
+  call('login', { id: i, pin: p }).then(function (d) { ls(K.tok, d.token); ls(K.usr, d.user.nama); showScan(); }).catch(function (e) { showLogin('Masuk otomatis gagal: ' + e.message); });
+}
 function showLogin(msg) {
   stopCam();
-  var hu = /[#&]u=([^&]+)/.exec(location.hash); if (hu) { try { ls(K.url, decodeURIComponent(hu[1])); } catch (e) { } }
   $('#app').innerHTML = '<div class="card"><h1>Scanner DU SIM</h1><div class="mut">Masuk dengan akun Petugas Scan (atau guru/wali/admin).</div>' +
     '<label>Alamat web app (berakhiran /exec)<input id="u" value="' + esc(ls(K.url) || '') + '" placeholder="https://script.google.com/macros/s/.../exec"></label>' +
     '<label>ID<input id="i" autocapitalize="characters" autocomplete="username"></label><label>PIN<input id="p" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"></label>' +
-    '<div class="err" id="e">' + esc(msg || '') + '</div><button id="go">Masuk</button></div>';
+    '<label style="flex-direction:row;align-items:center;gap:8px;font-weight:500"><input type="checkbox" id="rem" style="width:auto;height:auto"> Ingat login di HP ini (hanya untuk HP khusus gerbang)</label><div class="err" id="e">' + esc(msg || '') + '</div><button id="go">Masuk</button></div>';
   $('#go').onclick = function () {
     var u = $('#u').value.trim(); if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(u) && !/^https:\/\/script\.google\.com\/macros\/s\/.+/.test(u)) return $('#e').textContent = 'Alamat web app tidak valid.';
     ls(K.url, u); $('#go').disabled = true;
     call('login', { id: $('#i').value.trim(), pin: $('#p').value }).then(function (d) {
       if (d.user.wajibGanti) { $('#e').textContent = 'PIN awal harus diganti dulu lewat aplikasi utama, lalu masuk lagi di sini.'; $('#go').disabled = false; return; }
-      ls(K.tok, d.token); ls(K.usr, d.user.nama); showScan();
+      ls(K.tok, d.token); ls(K.usr, d.user.nama);
+      if ($('#rem').checked) { ls(K.id, $('#i').value.trim()); ls(K.pin, $('#p').value); } else { ls(K.id, null); ls(K.pin, null); }
+      showScan();
     }).catch(function (e) { $('#e').textContent = e.message; $('#go').disabled = false; });
   };
 }
@@ -61,10 +67,10 @@ function showScan() {
   $('#app').innerHTML = '<div class="row" style="align-items:center"><h1 style="flex:2">Scan Absensi</h1><button class="g" id="out" style="flex:1">Keluar</button></div><div class="mut">Masuk sebagai ' + esc(ls(K.usr) || '') + '</div>' +
     '<div class="tiles" id="st"></div><div class="card"><video id="v" playsinline muted></video><canvas id="cv" style="display:none"></canvas><button id="cam">Aktifkan kamera</button>' +
     '<label>Atau ketik kode kartu<input id="k" autocomplete="off" placeholder="DU-XXXXXXXXXX"></label><button class="g" id="m">Catat</button></div><div id="res"></div>';
-  $('#out').onclick = function () { call('logout').catch(function () { }); ls(K.tok, null); showLogin(); };
+  $('#out').onclick = function () { call('logout').catch(function () { }); ls(K.tok, null); ls(K.id, null); ls(K.pin, null); showLogin(); };
   $('#cam').onclick = startCam; $('#m').onclick = function () { submit($('#k').value); };
   $('#k').onkeydown = function (e) { if (e.key === 'Enter') submit($('#k').value); };
-  stat();
+  stat(); startCam();
 }
 function stat() { call('scanStat').then(function (d) { $('#st').innerHTML = '<div class="tile"><b>' + d.hadir + '/' + d.siswaAktif + '</b>Siswa hadir</div><div class="tile"><b>' + d.terlambat + '</b>Terlambat</div><div class="tile"><b>' + d.guruHadir + '/' + d.guruAktif + '</b>Guru hadir</div>'; }).catch(function () { }); }
 function startCam() {
@@ -92,7 +98,13 @@ function submit(kode) {
     stat();
   }).catch(function (e) { flash('#C2562E', 'Gagal', e.message); beep(true); });
 }
-if (ls(K.tok) && ls(K.url)) showScan(); else showLogin();
+(function () {
+  var h = location.hash || '', g = function (k) { var m = new RegExp('[#&]' + k + '=([^&]*)').exec(h); try { return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; } };
+  if (g('u')) ls(K.url, g('u'));
+  if (g('t')) { ls(K.tok, g('t')); ls(K.usr, g('n') || ''); }
+  if (h) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { } }
+})();
+if (ls(K.tok) && ls(K.url)) showScan(); else if (ls(K.id) && ls(K.pin) && ls(K.url)) relogin(); else showLogin();
 </script>
 </body>
 </html>
