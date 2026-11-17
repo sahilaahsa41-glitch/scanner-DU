@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner DU SIM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+:root{--ink:#17304D;--acc:#1F5C7A;--mut:#4D6075;--line:#D9E1E8}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#F3F6F9;color:var(--ink);font-size:15px}
+.wrap{max-width:480px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+h1{margin:0;font-size:22px}.mut{color:var(--mut);font-size:13px}
+label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--mut)}
+input{height:46px;border:1px solid #B9C7D3;border-radius:8px;padding:0 12px;font:inherit;color:var(--ink);width:100%}
+button{height:46px;border-radius:10px;border:1px solid var(--acc);background:var(--acc);color:#fff;font:inherit;font-weight:600;cursor:pointer}button.g{background:#fff;color:var(--ink);border-color:#B9C7D3}
+.row{display:flex;gap:8px}.row>*{flex:1}
+video{width:100%;border-radius:10px;background:#000;display:none}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.tile{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;text-align:center}.tile b{display:block;font-size:20px}
+#res{border-radius:12px;padding:18px;color:#fff;display:none;gap:4px;flex-direction:column}#res b{font-size:24px}
+.err{color:#9B3118;font-size:13px;min-height:18px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script>
+var K = { url: 'urlApp', tok: 'tokScan', usr: 'usrScan' };
+function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return null; } }
+function $(s) { return document.querySelector(s); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function call(action, payload) {
+  var url = ls(K.url);
+  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: ls(K.tok), action: action, payload: payload || {} }) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (r && r.ok) return r.data;
+      if (r && r.expired) { ls(K.tok, null); showLogin('Sesi berakhir, masuk lagi.'); }
+      throw new Error((r && r.error) || 'Terjadi kesalahan.');
+    }, function () { throw new Error('Tidak ada sinyal atau alamat salah.'); });
+}
+function showLogin(msg) {
+  stopCam();
+  $('#app').innerHTML = '<div class="card"><h1>Scanner DU SIM</h1><div class="mut">Masuk dengan akun Petugas Scan (atau guru/wali/admin).</div>' +
+    '<label>Alamat web app (berakhiran /exec)<input id="u" value="' + esc(ls(K.url) || '') + '" placeholder="https://script.google.com/macros/s/.../exec"></label>' +
+    '<label>ID<input id="i" autocapitalize="characters" autocomplete="username"></label><label>PIN<input id="p" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"></label>' +
+    '<div class="err" id="e">' + esc(msg || '') + '</div><button id="go">Masuk</button></div>';
+  $('#go').onclick = function () {
+    var u = $('#u').value.trim(); if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(u) && !/^https:\/\/script\.google\.com\/macros\/s\/.+/.test(u)) return $('#e').textContent = 'Alamat web app tidak valid.';
+    ls(K.url, u); $('#go').disabled = true;
+    call('login', { id: $('#i').value.trim(), pin: $('#p').value }).then(function (d) {
+      if (d.user.wajibGanti) { $('#e').textContent = 'PIN awal harus diganti dulu lewat aplikasi utama, lalu masuk lagi di sini.'; $('#go').disabled = false; return; }
+      ls(K.tok, d.token); ls(K.usr, d.user.nama); showScan();
+    }).catch(function (e) { $('#e').textContent = e.message; $('#go').disabled = false; });
+  };
+}
+var stream = null, timer = null, last = '', lastT = 0, det = null;
+function stopCam() { if (timer) clearInterval(timer); timer = null; if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+function beep(bad) { try { var a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(); o.frequency.value = bad ? 220 : 880; o.connect(a.destination); o.start(); setTimeout(function () { o.stop(); a.close(); }, bad ? 350 : 150); } catch (e) { } if (navigator.vibrate) navigator.vibrate(bad ? [200, 100, 200] : 80); }
+function showScan() {
+  $('#app').innerHTML = '<div class="row" style="align-items:center"><h1 style="flex:2">Scan Absensi</h1><button class="g" id="out" style="flex:1">Keluar</button></div><div class="mut">Masuk sebagai ' + esc(ls(K.usr) || '') + '</div>' +
+    '<div class="tiles" id="st"></div><div class="card"><video id="v" playsinline muted></video><canvas id="cv" style="display:none"></canvas><button id="cam">Aktifkan kamera</button>' +
+    '<label>Atau ketik kode kartu<input id="k" autocomplete="off" placeholder="DU-XXXXXXXXXX"></label><button class="g" id="m">Catat</button></div><div id="res"></div>';
+  $('#out').onclick = function () { call('logout').catch(function () { }); ls(K.tok, null); showLogin(); };
+  $('#cam').onclick = startCam; $('#m').onclick = function () { submit($('#k').value); };
+  $('#k').onkeydown = function (e) { if (e.key === 'Enter') submit($('#k').value); };
+  stat();
+}
+function stat() { call('scanStat').then(function (d) { $('#st').innerHTML = '<div class="tile"><b>' + d.hadir + '/' + d.siswaAktif + '</b>Siswa hadir</div><div class="tile"><b>' + d.terlambat + '</b>Terlambat</div><div class="tile"><b>' + d.guruHadir + '/' + d.guruAktif + '</b>Guru hadir</div>'; }).catch(function () { }); }
+function startCam() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return flash('#C2562E', 'Kamera tidak tersedia', 'Pakai HTTPS atau ketik kode manual.');
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (s) {
+    stream = s; var v = $('#v'); v.srcObject = s; v.style.display = 'block'; v.play(); $('#cam').style.display = 'none';
+    if ('BarcodeDetector' in window) det = new BarcodeDetector({ formats: ['qr_code'] });
+    var cv = $('#cv'), cx = cv.getContext('2d', { willReadFrequently: true });
+    timer = setInterval(function () {
+      if (v.readyState < 2) return;
+      if (det) det.detect(v).then(function (b) { if (b.length) submit(b[0].rawValue); }).catch(function () { });
+      else if (window.jsQR) { cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0); var im = cx.getImageData(0, 0, cv.width, cv.height), q = jsQR(im.data, im.width, im.height); if (q) submit(q.data); }
+    }, 300);
+  }).catch(function () { flash('#C2562E', 'Kamera ditolak', 'Izinkan kamera pada pengaturan situs, lalu muat ulang.'); });
+}
+function flash(color, title, sub, extra) { var r = $('#res'); r.style.display = 'flex'; r.style.background = color; r.innerHTML = '<b>' + esc(title) + '</b><div>' + esc(sub || '') + '</div>' + (extra ? '<div style="font-size:13px">' + esc(extra) + '</div>' : ''); }
+function submit(kode) {
+  kode = String(kode || '').trim().toUpperCase(); if (!kode) return;
+  var now = Date.now(); if (kode === last && now - lastT < 3500) return; last = kode; lastT = now; $('#k').value = '';
+  call('scan', { kode: kode }).then(function (r) {
+    var who = r.tipe === 'G' ? 'Guru' : 'Kelas ' + r.kelas;
+    if (r.sudah) { flash('#5E7183', r.nama, who + ' · sudah tercatat pukul ' + r.jam); beep(false); }
+    else if (r.terlambat) { flash('#B26A00', r.nama, who + ' · TERLAMBAT ' + r.jam, r.catatan); beep(true); }
+    else { flash('#0B5A4C', r.nama, who + ' · HADIR ' + r.jam); beep(false); }
+    stat();
+  }).catch(function (e) { flash('#C2562E', 'Gagal', e.message); beep(true); });
+}
+if (ls(K.tok) && ls(K.url)) showScan(); else showLogin();
+</script>
+</body>
+</html>
