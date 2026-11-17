@@ -40,6 +40,7 @@ function call(action, payload) {
 }
 function showLogin(msg) {
   stopCam();
+  var hu = /[#&]u=([^&]+)/.exec(location.hash); if (hu) { try { ls(K.url, decodeURIComponent(hu[1])); } catch (e) { } }
   $('#app').innerHTML = '<div class="card"><h1>Scanner DU SIM</h1><div class="mut">Masuk dengan akun Petugas Scan (atau guru/wali/admin).</div>' +
     '<label>Alamat web app (berakhiran /exec)<input id="u" value="' + esc(ls(K.url) || '') + '" placeholder="https://script.google.com/macros/s/.../exec"></label>' +
     '<label>ID<input id="i" autocapitalize="characters" autocomplete="username"></label><label>PIN<input id="p" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"></label>' +
